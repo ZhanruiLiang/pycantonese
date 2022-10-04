@@ -5,7 +5,9 @@ import os
 import pickle  # nosec
 import random
 
-from typing import Dict
+from typing import Dict, Hashable, List
+
+import numpy
 
 from pycantonese._punctuation_marks import _PUNCTUATION_MARKS
 from pycantonese.pos_tagging.hkcancor_to_ud import hkcancor_to_ud
@@ -34,6 +36,10 @@ class _AveragedPerceptron:
         # Each feature (key) gets its own weight vector (value).
         self.weights: Dict[str, Dict[str, float]] = {}
         self.classes = set()
+        self._classes: List[str] = []
+        self._feature_to_index: Dict[Hashable, int] = []
+        # 2D feature weights matrix where each columns represents a feature and each row a label/class.
+        self._weights_mat = numpy.zeros(1)
         # The accumulated values, for the averaging. These will be keyed by
         # feature/class tuples
         self._totals = collections.defaultdict(int)
@@ -44,7 +50,35 @@ class _AveragedPerceptron:
         # Number of instances seen
         self.i = 0
 
-    def predict(self, features):
+    def finalize(self):
+        """Builds aux data structures assuming weights and classes won't get changed."""
+        self._classes = sorted(self.classes)
+        self._feature_to_index = {f: i for i, f in enumerate(sorted(self.weights))}
+        self._weights_mat = numpy.zeros((len(self._classes), len(self._feature_to_index)), dtype=float)
+        for feature, col_i in self._feature_to_index.items():
+            weights = self.weights[feature]
+            for row_i, label in enumerate(self._classes):
+                v = weights.get(label, None)
+                if v:
+                    self._weights_mat[row_i, col_i] = v
+
+    def predict(self, features: Dict[Hashable, float]):
+        """Return the best label for the given features.
+
+        It's computed based on the dot-product between the features and
+        current weights.
+        """
+        feature_vec = numpy.zeros(len(self._feature_to_index))
+        for feature, value in features.items():
+            i = self._feature_to_index.get(feature, None)
+            if i is None:
+                continue
+            feature_vec[i] = value
+
+        scores = self._weights_mat.dot(feature_vec)
+        return self._classes[scores.argmax()]
+
+    def opredict(self, features):
         """Return the best label for the given features.
 
         It's computed based on the dot-product between the features and
@@ -55,6 +89,7 @@ class _AveragedPerceptron:
             if feat not in self.weights or value == 0:
                 continue
             weights = self.weights[feat]
+            # print('foooo', f'{feat=}', f'{value=}', weights)
             for label, weight in weights.items():
                 scores[label] += value * weight
         # Do a secondary alphabetic sort, for stability
@@ -228,6 +263,7 @@ class POSTagger:
             )
         self.model.weights, self.tagdict, self.classes = w_td_c
         self.model.classes = self.classes
+        self.model.finalize()
 
     def _get_features(self, i, word, context, prev, prev2):
         """Map tokens into a feature representation, implemented as a
