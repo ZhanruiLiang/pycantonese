@@ -23,6 +23,21 @@ _PICKLE_PROTOCOL = 4
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PICKLE_PATH = os.path.join(_THIS_DIR, "tagger.pickle")
 
+# Features
+_F_BIAS = "bias"
+_F_CUR_WORD_FIRST_CHAR = "i word's first char"
+_F_CUR_WORD_FINAL_CHAR = "i word's final char"
+_F_PREV_WORD_FIRST_CHAR = "i-1 word's first char"
+_F_PREV_WORD_FINAL_CHAR = "i-1 word's final char"
+_F_PREV_TAG = "i-1 tag"
+_F_PREV2_WORD_FIRST_CHAR = "i-2 word's first char"
+_F_PREV2_WORD_FINAL_CHAR = "i-2 word's final char"
+_F_PREV2_TAG = "i-2 tag"
+_F_NEXT_WORD_FIRST_CHAR = "i+1 word's first char"
+_F_NEXT_WORD_FINAL_CHAR = "i+1 word's final char"
+_F_NEXT2_WORD_FIRST_CHAR = "i+2 word's first char"
+_F_NEXT2_WORD_FINAL_CHAR = "i+2 word's final char"
+
 
 class _AveragedPerceptron:
     """An averaged perceptron.
@@ -39,7 +54,7 @@ class _AveragedPerceptron:
         self._classes: List[str] = []
         self._feature_to_index: Dict[Hashable, int] = []
         # 2D feature weights matrix where each columns represents a feature and each row a label/class.
-        self._weights_mat = numpy.zeros(1)
+        self._weights_mat = numpy.zeros((1, 1))
         # The accumulated values, for the averaging. These will be keyed by
         # feature/class tuples
         self._totals = collections.defaultdict(int)
@@ -68,18 +83,13 @@ class _AveragedPerceptron:
         It's computed based on the dot-product between the features and
         current weights.
         """
-        feature_vec = numpy.zeros(len(self._feature_to_index))
-        for feature, value in features.items():
-            i = self._feature_to_index.get(feature, None)
-            if i is None:
-                continue
-            feature_vec[i] = value
+        features = [(f, v) for f, v in features.items() if f in self._feature_to_index]
+        feature_vec = numpy.array([v for _, v in features])
+        weights = self._weights_mat[:, [self._feature_to_index[f] for f, _ in features]]
+        return self._classes[weights.dot(feature_vec).argmax()]
 
-        scores = self._weights_mat.dot(feature_vec)
-        return self._classes[scores.argmax()]
-
-    def opredict(self, features):
-        """Return the best label for the given features.
+    def dynamic_predict(self, features: Dict[Hashable, float]):
+        """Same as predict but can be used on a model that's not finalized.
 
         It's computed based on the dot-product between the features and
         current weights.
@@ -89,7 +99,6 @@ class _AveragedPerceptron:
             if feat not in self.weights or value == 0:
                 continue
             weights = self.weights[feat]
-            # print('foooo', f'{feat=}', f'{value=}', weights)
             for label, weight in weights.items():
                 scores[label] += value * weight
         # Do a secondary alphabetic sort, for stability
@@ -221,7 +230,7 @@ class POSTagger:
                         guess = self.tagdict[word]
                     except KeyError:
                         feats = self._get_features(i, word, context, prev, prev2)
-                        guess = self.model.predict(feats)
+                        guess = self.model.dynamic_predict(feats)
                         self.model.update(tag, guess, feats)
                     prev2 = prev
                     prev = guess
@@ -279,24 +288,25 @@ class POSTagger:
 
         # It's useful to have a constant feature,
         # which acts sort of like a prior.
-        add("bias")
+        add(_F_BIAS)
 
-        add("i word's first char", word[0])
-        add("i word's final char", word[-1])
+        add(_F_CUR_WORD_FIRST_CHAR, word[0])
+        add(_F_CUR_WORD_FINAL_CHAR, word[-1])
 
-        add("i-1 word's first char", context[i - 1][0])
-        add("i-1 word's final char", context[i - 1][-1])
-        add("i-1 tag", prev)
+        add(_F_PREV_WORD_FIRST_CHAR, context[i - 1][0])
+        add(_F_PREV_WORD_FINAL_CHAR, context[i - 1][-1])
+        add(_F_PREV_TAG, prev)
 
-        add("i-2 word's first char", context[i - 2][0])
-        add("i-2 word's final char", context[i - 2][-1])
-        add("i-2 tag", prev2)
+        add(_F_PREV2_WORD_FIRST_CHAR, context[i - 2][0])
+        add(_F_PREV2_WORD_FINAL_CHAR, context[i - 2][-1])
+        add(_F_PREV2_TAG, prev2)
 
-        add("i+1 word's first char", context[i + 1][0])
-        add("i+1 word's final char", context[i + 1][-1])
+        add(_F_NEXT_WORD_FIRST_CHAR, context[i + 1][0])
+        add(_F_NEXT_WORD_FINAL_CHAR, context[i + 1][-1])
 
-        add("i+2 word's first char", context[i - 2][0])
-        add("i+2 word's final char", context[i - 2][-1])
+        # Prev impl has copy-paste error.
+        add(_F_NEXT2_WORD_FIRST_CHAR, context[i + 2][0])
+        add(_F_NEXT2_WORD_FINAL_CHAR, context[i + 2][-1])
 
         return features
 
